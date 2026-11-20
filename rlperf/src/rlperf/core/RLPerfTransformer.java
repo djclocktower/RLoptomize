@@ -91,6 +91,12 @@ public class RLPerfTransformer implements IClassTransformer, Opcodes {
                     return enabled("populateCascadeGuard") ? patchChunk(bytes) : bytes;
                 case "net.minecraft.server.MinecraftServer":
                     return enabled("chunkLoadPacing") || enabled("worldgenPreload") || slowTickLog() ? patchServer(bytes) : bytes;
+                case "net.optifine.shaders.Shaders":
+                    return dhBridge() ? patchShaders(bytes) : bytes;
+                case "net.optifine.shaders.config.ShaderMacros":
+                    return dhBridge() ? patchShaderMacros(bytes) : bytes;
+                case "com.seibel.distanthorizons.lwjgl.lwjgl2.LWJGL2Service":
+                    return dhBridge() ? patchDhGl(bytes) : bytes;
                 case "net.minecraft.server.management.PlayerChunkMap":
                     return enabled("chunkLoadPacing") ? patchPlayerChunkMap(bytes) : bytes;
                 default:
@@ -160,6 +166,123 @@ public class RLPerfTransformer implements IClassTransformer, Opcodes {
         macros.instructions.add(new InsnNode(ARETURN));
 
         LOG.info("Patched OptiFine shader option parsing");
+        return write(cn);
+    }
+
+    // ---- Distant Horizons through OptiFine shader packs ---------------------------------------
+
+    private static final String HOOKS_SH = "rlperf/hooks/ShaderHooks";
+    private static final String PROGRAM = "Lnet/optifine/shaders/Program;";
+    private static final String SHA_SHADERS = "755b44c46e4cf94ef8f518a152bce592c59026b6";
+    private static final String SHA_SHADER_MACROS = "d29a60f0fc14a148bb8ead6faf0d9675d336885e";
+    private static Boolean dhBridge;
+
+    /** Only when the bridge is switched on, Distant Horizons is installed and OptiFine is exactly G5. */
+    private static synchronized boolean dhBridge() {
+        if (dhBridge == null) {
+            boolean ok = false;
+            try {
+                ok = enabled("distantHorizonsShaders")
+                        && Launch.classLoader.getResource("com/seibel/distanthorizons/api/DhApi.class") != null
+                        && SHA_SHADERS.equals(rawSha1("net.optifine.shaders.Shaders"))
+                        && SHA_SHADER_MACROS.equals(rawSha1("net.optifine.shaders.config.ShaderMacros"));
+            } catch (Exception e) {
+                // not there: no bridge
+            }
+            dhBridge = ok;
+        }
+        return dhBridge;
+    }
+
+    private static byte[] patchShaders(byte[] bytes) {
+        ClassNode cn = read(bytes);
+        MethodNode clinit = method(cn, "<clinit>", "()V");
+        MethodNode vert = method(cn, "createVertShader", "(" + PROGRAM + "Ljava/lang/String;)I");
+        MethodNode frag = method(cn, "createFragShader", "(" + PROGRAM + "Ljava/lang/String;)I");
+        MethodNode setup = method(cn, "setupProgram", "(" + PROGRAM + "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+        MethodNode use = method(cn, "useProgram", "(" + PROGRAM + ")V");
+        MethodNode water = method(cn, "beginWater", "()V");
+        if (clinit == null || vert == null || frag == null || setup == null || use == null || water == null) {
+            LOG.warn("OptiFine Shaders does not look as expected; Distant Horizons bridge skipped");
+            return bytes;
+        }
+        int done = 0;
+        // programs.getPrograms() -> ProgramsAll: add the LOD programs to the list first
+        for (AbstractInsnNode n : clinit.instructions.toArray()) {
+            if (n.getOpcode() == INVOKEVIRTUAL && ((MethodInsnNode) n).name.equals("getPrograms")
+                    && ((MethodInsnNode) n).desc.equals("()[Lnet/optifine/shaders/Program;")) {
+                InsnList in = new InsnList();
+                in.add(new InsnNode(DUP));
+                in.add(new MethodInsnNode(INVOKESTATIC, HOOKS_SH, "registerPrograms", "(Lnet/optifine/shaders/Programs;)V", false));
+                clinit.instructions.insertBefore(n, in);
+                done++;
+                break;
+            }
+        }
+        for (MethodNode m : new MethodNode[] {vert, frag}) {
+            InsnList head = new InsnList();
+            head.add(new VarInsnNode(ALOAD, 0));
+            head.add(new VarInsnNode(ALOAD, 1));
+            head.add(new MethodInsnNode(INVOKESTATIC, HOOKS_SH, "compiling", "(" + PROGRAM + "Ljava/lang/String;)V", false));
+            m.instructions.insert(head);
+            done += redirect(m, "glShaderSourceARB", "(ILjava/lang/CharSequence;)V", "shaderSource");
+        }
+        done += redirect(setup, "glLinkProgramARB", "(I)V", "linkProgram");
+        for (AbstractInsnNode n : use.instructions.toArray()) {
+            if (n.getOpcode() != RETURN) continue;
+            InsnList in = new InsnList();
+            in.add(new VarInsnNode(ALOAD, 0));
+            in.add(new MethodInsnNode(INVOKESTATIC, HOOKS_SH, "afterUseProgram", "(" + PROGRAM + ")V", false));
+            use.instructions.insertBefore(n, in);
+        }
+        // Translucent LODs go in once OptiFine is set up for water, after the pack's deferred passes.
+        for (AbstractInsnNode n : water.instructions.toArray()) {
+            if (n.getOpcode() == RETURN) {
+                water.instructions.insertBefore(n, new MethodInsnNode(INVOKESTATIC, HOOKS_SH, "afterBeginWater", "()V", false));
+            }
+        }
+        if (done != 4) {
+            LOG.warn("OptiFine Shaders does not look as expected (" + done + "/4); Distant Horizons bridge skipped");
+            return bytes;
+        }
+        LOG.info("Patched OptiFine Shaders (Distant Horizons bridge)");
+        return write(cn);
+    }
+
+    /** Points every call of an OptiFine GL function in the method at the hook of the same shape. */
+    private static int redirect(MethodNode m, String name, String desc, String hook) {
+        int count = 0;
+        for (AbstractInsnNode n : m.instructions.toArray()) {
+            if (n.getOpcode() == INVOKESTATIC && ((MethodInsnNode) n).name.equals(name) && ((MethodInsnNode) n).desc.equals(desc)) {
+                m.instructions.set(n, new MethodInsnNode(INVOKESTATIC, HOOKS_SH, hook, desc, false));
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static byte[] patchShaderMacros(byte[] bytes) {
+        ClassNode cn = read(bytes);
+        MethodNode lines = method(cn, "getFixedMacroLines", "()Ljava/lang/String;");
+        if (lines == null) return bytes;
+        for (AbstractInsnNode n : lines.instructions.toArray()) {
+            if (n.getOpcode() == ARETURN) {
+                lines.instructions.insertBefore(n, new MethodInsnNode(INVOKESTATIC, HOOKS_SH, "macros", "(Ljava/lang/String;)Ljava/lang/String;", false));
+            }
+        }
+        return write(cn);
+    }
+
+    /** Distant Horizons unbinding its program must not leave OptiFine's terrain without one. */
+    private static byte[] patchDhGl(byte[] bytes) {
+        ClassNode cn = read(bytes);
+        MethodNode use = method(cn, "glUseProgram", "(I)V");
+        if (use == null) return bytes;
+        InsnList in = new InsnList();
+        in.add(new VarInsnNode(ILOAD, 1));
+        in.add(new MethodInsnNode(INVOKESTATIC, HOOKS_SH, "programForDh", "(I)I", false));
+        in.add(new VarInsnNode(ISTORE, 1));
+        use.instructions.insert(in);
         return write(cn);
     }
 

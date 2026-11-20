@@ -20,7 +20,7 @@ without shaders.
 
 ## RLPerf: the patch mod
 
-`overrides/mods/rlperf-1.1.0.jar`, source in [`rlperf/`](rlperf). It was written from profiles of
+`overrides/mods/rlperf-1.2.0.jar`, source in [`rlperf/`](rlperf). It was written from profiles of
 this pack: stack samples of startup, of the server thread while standing still, and of the server
 thread while flying through ungenerated terrain. It contains three speed patches, described here,
 and the fixes for mob stutter described in the next section.
@@ -102,6 +102,50 @@ competes with the server for CPU, so each generated chunk costs more here than i
 If the stutter comes back, set `slowTickLog=true` in `config/rlperf.properties`, play until it
 happens, and look at `logs/rlperf-slow-ticks.log`: it names what the server was doing in every
 slow tick and the tick rate around it.
+
+## Experimental: Distant Horizons with the shader
+
+[Distant Horizons](https://www.curseforge.com/minecraft/mc-mods/distant-horizons) draws simplified
+terrain far past the render distance. Out of the box it does not work with OptiFine shaders on
+1.12.2: the game crashes on entering a world. `experimental-dh/manifest.json` is a variant of this
+pack where it does, with the distant terrain lit and fogged by Complementary itself.
+
+RLPerf makes that work with a port of the bridge Iris uses on modern versions. OptiFine is taught to
+load the shader pack's own `dh_terrain` and `dh_water` programs, Distant Horizons is told to draw
+with them into the pack's buffers, and every shader gets the extra depth texture and projection it
+needs to blend the two. It only switches on when Distant Horizons is installed, OptiFine is exactly
+G5, and the selected pack has those programs.
+
+To build that variant's zip, from the repository root:
+
+```bash
+zip -r RLCraft-DH.zip modlist.html overrides
+```
+
+```bash
+cd experimental-dh && zip ../RLCraft-DH.zip manifest.json
+```
+
+Import it as a second profile and add OptiFine as above.
+
+**It is a separate profile for a reason.** Distant Horizons needs the MixinBooter library, so this
+variant swaps out three of the pack's foundations: MixinBootstrap and the Mixin 0.7–0.8
+compatibility shim go, MixinBooter comes in, and Phosphor is replaced by Alfheim with Red Core.
+Everything else, more than a dozen mods that patch the game, now runs on a library it was not
+shipped with.
+
+Tested, in the software-rendered container: boots, joins a world, shader on and off, from the air
+and from the ground, day and night, opaque and translucent distant terrain, no OpenGL errors and no
+crash, each for a few minutes. Not tested: a real graphics card, hours of play, combat, other
+dimensions, multiplayer.
+
+Known limits:
+
+- Distant terrain casts no shadows and does not appear in the shadow map.
+- Distant Horizons' own clouds and beacon beams are off while a shader pack is on.
+- Distant terrain fills in slowly, because it runs RLCraft's world generation in the background.
+  That is the same work that causes server stalls, so expect more of them while it catches up.
+- Under a shader pack with no `dh_terrain` program, distant terrain is hidden instead of drawn wrong.
 
 ## Other changes
 
@@ -221,14 +265,14 @@ to ship.
 ## Building RLPerf
 
 Needs a JDK 9 or newer, a Minecraft `libraries` folder with Forge 1.12.2 installed, and the Better
-Caves and Lycanites Mobs jars:
+Caves, Lycanites Mobs and Distant Horizons jars:
 
 ```bash
-LIBS=~/.minecraft/libraries BC_JAR=bettercaves-1.12.2-2.0.4.jar LY_JAR=lycanitesmobs-1.12.2-2.0.8.9.jar rlperf/build.sh
+LIBS=~/.minecraft/libraries BC_JAR=bettercaves-1.12.2-2.0.4.jar LY_JAR=lycanitesmobs-1.12.2-2.0.8.9.jar DH_JAR=DistantHorizons-3.3.3-1.12.2-forge.jar rlperf/build.sh
 ```
 
 ```bash
-LIBS=~/.minecraft/libraries BC_JAR=bettercaves-1.12.2-2.0.4.jar LY_JAR=lycanitesmobs-1.12.2-2.0.8.9.jar rlperf/test.sh
+LIBS=~/.minecraft/libraries BC_JAR=bettercaves-1.12.2-2.0.4.jar LY_JAR=lycanitesmobs-1.12.2-2.0.8.9.jar DH_JAR=DistantHorizons-3.3.3-1.12.2-forge.jar rlperf/test.sh
 ```
 
 The test prints `ALL EQUIVALENT` when the patched code produces the same output as the original.
@@ -243,4 +287,7 @@ The test prints `ALL EQUIVALENT` when the patched code produces the same output 
 - YUNG's Better Caves by YUNGNICKYOUNG (LGPL-3.0-only). RLPerf replaces four of its classes and two
   methods at load time with rewritten versions, and is LGPL-3.0 itself for that reason.
 - Lycanites Mobs by Lycanite. RLPerf replaces one method of its spawner code at load time.
+- Distant Horizons by James Seibel and team, and [Iris](https://github.com/IrisShaders/Iris) by the
+  Iris team (both LGPL-3.0). The Distant Horizons bridge in RLPerf follows Iris's and reuses its
+  vertex decoding.
 - Nothirium, RenderLib and Entity Culling by meldexun; Particle Culling by bl4ckscor3.

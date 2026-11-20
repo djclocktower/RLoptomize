@@ -1,6 +1,6 @@
 #!/bin/bash
 # Runs the equivalence test against a finished build. Same inputs as build.sh.
-# usage: LIBS=... BC_JAR=... LY_JAR=... ./test.sh [build-dir]      (TIMING=1 to time the pipeline without the noise hashing)
+# usage: LIBS=... BC_JAR=... LY_JAR=... DH_JAR=... ./test.sh [build-dir]      (TIMING=1 to time the pipeline without the noise hashing)
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=${1:-build}

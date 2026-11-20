@@ -22,6 +22,7 @@ import rlperf.hooks.OptiFineHooks;
 public class EquivalenceTest {
     public static void main(String[] a) throws Exception {
         optifineHooks();
+        shaderPatch();
         List<URL> urls = new ArrayList<URL>();
         for (String path : a) urls.add(new File(path).toURI().toURL());
         urls.remove(2);   // the donor classes are not on the class path; they are patched in below
@@ -71,6 +72,20 @@ public class EquivalenceTest {
         long t = System.nanoTime();
         s.get();
         return new String[] {first, String.valueOf((System.nanoTime() - t) / 1000000)};
+    }
+
+    // ---- Distant Horizons shader patch ------------------------------------------------------------
+
+    private static void shaderPatch() {
+        String source = "#version 130\n#define X\n#ifdef FRAGMENT_SHADER\nvoid main() {\n}\n#endif\nvoid main( void )\n{\n    gl_Position = gl_Vertex;\n}\n";
+        String vertex = rlperf.dh.DhShaderPatch.patch(source, true), fragment = rlperf.dh.DhShaderPatch.patch(source, false);
+        if (!vertex.startsWith("#version 130\nuniform mat4 iris_ModelViewMatrix;")) throw new AssertionError("declarations must follow #version");
+        if (vertex.split("_vert_init\\(\\);", -1).length != 3) throw new AssertionError("every main() must decode the vertex");
+        if (!vertex.contains("#define gl_Vertex dh_vertex()") || vertex.indexOf("#define gl_Vertex") > vertex.indexOf("gl_Position = gl_Vertex")) {
+            throw new AssertionError("gl_Vertex must be redirected before it is used");
+        }
+        if (fragment.contains("_vert_init();") || fragment.contains("vPosition")) throw new AssertionError("fragment shaders get no vertex decoding");
+        System.out.println("Distant Horizons shader patch places its declarations and vertex decoding correctly");
     }
 
     // ---- OptiFine hooks vs the code they stand in for ------------------------------------------
