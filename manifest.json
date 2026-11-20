@@ -10,8 +10,8 @@
   },
   "manifestType": "minecraftModpack",
   "manifestVersion": 1,
-  "name": "RLCraft",
-  "version": "2.9.3",
+  "name": "RLCraft Optimized",
+  "version": "2.9.3-opt1",
   "author": "Shivaxi",
   "files": [
     {
@@ -176,7 +176,7 @@
     },
     {
       "projectID": 624967,
-      "fileID": 4486119,
+      "fileID": 6461209,
       "required": true
     },
     {
@@ -446,7 +446,7 @@
     },
     {
       "projectID": 408853,
-      "fileID": 4439001,
+      "fileID": 5337217,
       "required": true
     },
     {
@@ -606,7 +606,7 @@
     },
     {
       "projectID": 409087,
-      "fileID": 4433037,
+      "fileID": 6215595,
       "required": true
     },
     {
@@ -947,6 +947,16 @@
     {
       "projectID": 381953,
       "fileID": 2951925,
+      "required": true
+    },
+    {
+      "projectID": 624960,
+      "fileID": 7441674,
+      "required": true
+    },
+    {
+      "projectID": 385587,
+      "fileID": 9687815,
       "required": true
     }
   ],

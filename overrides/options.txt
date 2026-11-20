@@ -4,9 +4,9 @@ mouseSensitivity:0.40140846
 fov:0.125
 gamma:0.0
 saturation:0.0
-renderDistance:10
+renderDistance:8
 guiScale:0
-particles:0
+particles:1
 bobView:true
 anaglyph3d:false
 maxFps:260
@@ -43,7 +43,7 @@ mipmapLevels:1
 forceUnicodeFont:false
 reducedDebugInfo:false
 useNativeTransport:true
-entityShadows:true
+entityShadows:false
 mainHand:right
 attackIndicator:1
 showSubtitles:false
