@@ -65,13 +65,17 @@ public class RLPerfTransformer implements IClassTransformer, Opcodes {
     }
 
     /** Patches default to on; switch one off in config/rlperf.properties or with -Drlperf.<key>=false. */
-    static synchronized boolean enabled(String key) {
+    static boolean enabled(String key) {
+        return !"false".equalsIgnoreCase(setting(key, "true"));
+    }
+
+    static synchronized String setting(String key, String fallback) {
         String v = System.getProperty("rlperf." + key);
         if (v == null) {
             if (cfg == null) cfg = loadConfig();
-            v = cfg.getProperty(key, "true");
+            v = cfg.getProperty(key, fallback);
         }
-        return !"false".equalsIgnoreCase(v.trim());
+        return v.trim();
     }
 
     @Override
@@ -85,10 +89,12 @@ public class RLPerfTransformer implements IClassTransformer, Opcodes {
                     return enabled("populateCascadeGuard") ? patchWorld(bytes) : bytes;
                 case "net.minecraft.world.chunk.Chunk":
                     return enabled("populateCascadeGuard") ? patchChunk(bytes) : bytes;
+                case "net.minecraft.server.MinecraftServer":
+                    return enabled("chunkLoadPacing") || enabled("worldgenPreload") || slowTickLog() ? patchServer(bytes) : bytes;
+                case "net.minecraft.server.management.PlayerChunkMap":
+                    return enabled("chunkLoadPacing") ? patchPlayerChunkMap(bytes) : bytes;
                 default:
-                    if (transformedName.startsWith(BetterCavesPatch.PKG) && enabled("betterCavesNoise")) {
-                        return BetterCavesPatch.apply(transformedName, bytes);
-                    }
+                    return DonorPatches.apply(transformedName, bytes);
             }
         } catch (Throwable t) {
             LOG.error("Patch failed for " + transformedName + "; class left unchanged", t);
@@ -210,6 +216,69 @@ public class RLPerfTransformer implements IClassTransformer, Opcodes {
         populate.instructions.add(new InsnNode(ATHROW));
         populate.tryCatchBlocks.add(new TryCatchBlockNode(start, end, handler, null));
         LOG.info("Patched Chunk.populate (cascade guard)");
+        return write(cn);
+    }
+
+    // ---- Server tick: chunk load pacing and the slow tick log ------------------------------------
+
+    private static boolean slowTickLog() {
+        return "true".equalsIgnoreCase(setting("slowTickLog", "false"));
+    }
+
+    /**
+     * PlayerChunkMap.tick loads and generates chunks for players until 50 ms have passed. Replace that
+     * constant with the paced budget, and let the tick skip the loop when the server is behind.
+     */
+    private static byte[] patchPlayerChunkMap(byte[] bytes) {
+        ClassNode cn = read(bytes);
+        MethodNode tick = method(cn, "func_72693_b", "()V");
+        if (tick != null) {
+            for (AbstractInsnNode n : tick.instructions.toArray()) {
+                if (!(n instanceof LdcInsnNode) || !Long.valueOf(50000000L).equals(((LdcInsnNode) n).cst)) continue;
+                // if (!list.isEmpty()) { long deadline = System.nanoTime() + 50000000L; ...
+                AbstractInsnNode back = n;
+                for (int i = 0; i < 6 && back != null && back.getOpcode() != IFNE; i++) back = back.getPrevious();
+                if (back != null && back.getOpcode() == IFNE) {
+                    InsnList gate = new InsnList();
+                    gate.add(new MethodInsnNode(INVOKESTATIC, "rlperf/hooks/TickWatch", "mayLoadChunks", "()Z", false));
+                    gate.add(new JumpInsnNode(IFEQ, ((JumpInsnNode) back).label));
+                    tick.instructions.insert(back, gate);
+                }
+                tick.instructions.set(n, new MethodInsnNode(INVOKESTATIC, "rlperf/hooks/TickWatch", "chunkBudgetNanos", "()J", false));
+                LOG.info("Patched PlayerChunkMap (chunk load pacing)");
+                return write(cn);
+            }
+        }
+        LOG.warn("PlayerChunkMap does not look as expected; chunk load pacing skipped");
+        return bytes;
+    }
+
+    private static byte[] patchServer(byte[] bytes) {
+        ClassNode cn = read(bytes);
+        MethodNode run = method(cn, "run", "()V");
+        int wrapped = 0;
+        if (run != null) {
+            for (AbstractInsnNode n : run.instructions.toArray()) {
+                if (n.getOpcode() == INVOKEVIRTUAL && ((MethodInsnNode) n).name.equals("func_71217_p")   // tick()
+                        && ((MethodInsnNode) n).desc.equals("()V")) {
+                    run.instructions.insertBefore(n, new MethodInsnNode(INVOKESTATIC, "rlperf/hooks/TickWatch", "tickStart", "()V", false));
+                    run.instructions.insert(n, new MethodInsnNode(INVOKESTATIC, "rlperf/hooks/TickWatch", "tickEnd", "()V", false));
+                    wrapped++;
+                }
+            }
+        }
+        if (wrapped == 0) {
+            LOG.warn("MinecraftServer does not look as expected; tick hooks skipped");
+            return bytes;
+        }
+        if (enabled("worldgenPreload")) {
+            run.instructions.insert(new MethodInsnNode(INVOKESTATIC, "rlperf/hooks/TickWatch", "serverStarting", "()V", false));
+        }
+        if (slowTickLog()) {
+            rlperf.hooks.TickWatch.configure(Launch.minecraftHome != null ? Launch.minecraftHome : new File("."),
+                    Long.parseLong(setting("slowTickThresholdMs", "100")));
+            LOG.info("Slow tick log enabled: logs/rlperf-slow-ticks.log");
+        }
         return write(cn);
     }
 

@@ -17,49 +17,55 @@ import rlperf.hooks.OptiFineHooks;
 
 /**
  * Checks that the patches change speed and nothing else.
- * args: bettercaves.jar, test-doubles dir, scenario dir, donor classes dir, vecmath.jar
+ * args: stubs dir, scenario dir, donor classes dir, then every jar the scenarios need
  */
 public class EquivalenceTest {
     public static void main(String[] a) throws Exception {
         optifineHooks();
-        betterCaves(new File(a[0]), new File(a[1]), new File(a[2]), new File(a[3]), new File(a[4]));
+        List<URL> urls = new ArrayList<URL>();
+        for (String path : a) urls.add(new File(path).toURI().toURL());
+        urls.remove(2);   // the donor classes are not on the class path; they are patched in below
+        donorPatches(urls.toArray(new URL[0]), new File(a[2]));
         System.out.println("ALL EQUIVALENT");
     }
 
-    // ---- Better Caves: original classes vs patched classes, same randomised scenario ----------
+    // ---- Rewritten mod code: original classes vs patched classes, same randomised scenarios -----
 
-    private static void betterCaves(File bcJar, File doubles, File scenario, File donor, File vecmath) throws Exception {
-        URL[] urls = {doubles.toURI().toURL(), scenario.toURI().toURL(), bcJar.toURI().toURL(), vecmath.toURI().toURL()};
+    private static void donorPatches(URL[] urls, File donor) throws Exception {
         final Map<String, byte[]> patched = new HashMap<String, byte[]>();
-        try (URLClassLoader jar = new URLClassLoader(new URL[] {bcJar.toURI().toURL()}, null)) {
-            for (String key : BetterCavesPatch.REPLACE) {
-                String name = BetterCavesPatch.PKG + key;
-                patched.put(name, Files.readAllBytes(new File(donor, name.replace('.', '/') + ".class").toPath()));
-            }
-            for (Map.Entry<String, List<String>> e : BetterCavesPatch.TRANSPLANT.entrySet()) {
-                String name = BetterCavesPatch.PKG + e.getKey();
-                byte[] original;
-                try (InputStream in = jar.getResourceAsStream(name.replace('.', '/') + ".class")) { original = in.readAllBytes(); }
-                byte[] donorBytes = Files.readAllBytes(new File(donor, name.replace('.', '/') + ".class").toPath());
-                patched.put(name, BetterCavesPatch.transplant(original, donorBytes, e.getValue()));
+        try (URLClassLoader jars = new URLClassLoader(urls, null)) {
+            for (DonorPatches.Mod mod : DonorPatches.MODS) {
+                for (String key : mod.replace) {
+                    String name = mod.pkg + key;
+                    patched.put(name, Files.readAllBytes(new File(donor, name.replace('.', '/') + ".class").toPath()));
+                }
+                for (Map.Entry<String, List<String>> e : mod.transplant.entrySet()) {
+                    String name = mod.pkg + e.getKey();
+                    byte[] original;
+                    try (InputStream in = jars.getResourceAsStream(name.replace('.', '/') + ".class")) { original = in.readAllBytes(); }
+                    byte[] donorBytes = Files.readAllBytes(new File(donor, name.replace('.', '/') + ".class").toPath());
+                    patched.put(name, DonorPatches.transplant(original, donorBytes, e.getValue()));
+                }
             }
         }
-        ClassLoader original = new URLClassLoader(urls, null);
-        ClassLoader rewritten = new URLClassLoader(urls, null) {
-            @Override protected Class<?> findClass(String name) throws ClassNotFoundException {
-                byte[] b = patched.get(name);
-                return b != null ? defineClass(name, b, 0, b.length) : super.findClass(name);
-            }
-        };
-        String[] before = run(original), after = run(rewritten);
-        System.out.println("Better Caves original: " + before[0] + "  (" + before[1] + " ms)");
-        System.out.println("Better Caves patched:  " + after[0] + "  (" + after[1] + " ms)");
-        if (!before[0].equals(after[0])) throw new AssertionError("Better Caves patch changes the output");
+        for (String scenario : new String[] {"Scenario", "SpawnScanScenario"}) {
+            ClassLoader original = new URLClassLoader(urls, null);
+            ClassLoader rewritten = new URLClassLoader(urls, null) {
+                @Override protected Class<?> findClass(String name) throws ClassNotFoundException {
+                    byte[] b = patched.get(name);
+                    return b != null ? defineClass(name, b, 0, b.length) : super.findClass(name);
+                }
+            };
+            String[] before = run(original, scenario), after = run(rewritten, scenario);
+            System.out.println(scenario + " original: " + before[0] + "  (" + before[1] + " ms)");
+            System.out.println(scenario + " patched:  " + after[0] + "  (" + after[1] + " ms)");
+            if (!before[0].equals(after[0])) throw new AssertionError(scenario + ": the patch changes the output");
+        }
     }
 
     @SuppressWarnings("unchecked")
-    private static String[] run(ClassLoader loader) throws Exception {
-        Supplier<String> s = (Supplier<String>) loader.loadClass("Scenario").getDeclaredConstructor().newInstance();
+    private static String[] run(ClassLoader loader, String scenario) throws Exception {
+        Supplier<String> s = (Supplier<String>) loader.loadClass(scenario).getDeclaredConstructor().newInstance();
         String first = s.get();   // also warms up the JIT
         s.get();
         long t = System.nanoTime();

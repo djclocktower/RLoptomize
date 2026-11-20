@@ -1,2 +1,3 @@
 package net.minecraft.block.state;
-public interface IBlockState {}
+import net.minecraft.block.Block;
+public interface IBlockState { Block func_177230_c(); }

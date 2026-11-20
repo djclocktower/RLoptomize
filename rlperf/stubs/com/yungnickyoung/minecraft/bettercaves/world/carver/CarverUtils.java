@@ -16,11 +16,11 @@ public class CarverUtils {
 
     public static void digBlock(World world, ChunkPrimer primer, BlockPos pos, IBlockState air, IBlockState liquid, int liquidAltitude, boolean replaceGravel) {
         calls++;
-        mix(1); mix(pos.x); mix(pos.y); mix(pos.z); mix(id(air)); mix(id(liquid)); mix(liquidAltitude); mix(replaceGravel ? 1 : 0);
+        mix(1); mix(pos.func_177958_n()); mix(pos.func_177956_o()); mix(pos.func_177952_p()); mix(id(air)); mix(id(liquid)); mix(liquidAltitude); mix(replaceGravel ? 1 : 0);
     }
 
     public static void debugDigBlock(ChunkPrimer primer, BlockPos pos, IBlockState state, boolean digBlock) {
         calls++;
-        mix(2); mix(pos.x); mix(pos.y); mix(pos.z); mix(id(state)); mix(digBlock ? 1 : 0);
+        mix(2); mix(pos.func_177958_n()); mix(pos.func_177956_o()); mix(pos.func_177952_p()); mix(id(state)); mix(digBlock ? 1 : 0);
     }
 }
