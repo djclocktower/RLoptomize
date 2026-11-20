@@ -38,7 +38,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  */
 public class RLPerfTransformer implements IClassTransformer, Opcodes {
     static final Logger LOG = LogManager.getLogger("RLPerf");
-    private static final Properties CFG = loadConfig();
+    private static Properties cfg;
 
     private static final String HOOKS_OF = "rlperf/hooks/OptiFineHooks";
     private static final String HOOKS_WG = "rlperf/hooks/WorldgenHooks";
@@ -65,9 +65,12 @@ public class RLPerfTransformer implements IClassTransformer, Opcodes {
     }
 
     /** Patches default to on; switch one off in config/rlperf.properties or with -Drlperf.<key>=false. */
-    static boolean enabled(String key) {
+    static synchronized boolean enabled(String key) {
         String v = System.getProperty("rlperf." + key);
-        if (v == null) v = CFG.getProperty(key, "true");
+        if (v == null) {
+            if (cfg == null) cfg = loadConfig();
+            v = cfg.getProperty(key, "true");
+        }
         return !"false".equalsIgnoreCase(v.trim());
     }
 
